@@ -31,7 +31,7 @@ class VLLMWrapper(BaseModel):
         
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.llm = LLM(model=model_name)
+            self.llm = LLM(model=model_name, disable_log_stats=True, log_level="ERROR")
             
             if self.verbose:
                 print(f"[VLLMWrapper] Model {self.model_name} loaded successfully.")
