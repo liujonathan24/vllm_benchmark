@@ -10,36 +10,47 @@ class VLLMWrapper(BaseModel):
     VLLM model wrapper that manages initialization, generation,
     chat, and memory cleanup.
     """
-    
     def __init__(self, model_name: str, verbose: bool = True, max_tokens: int = 512, temperature: float = 0.7, top_p: float = 0.95):
-        """
-        Initializes and loads the vLLM model and tokenizer.
-        """
-        super().__init__(model_name, verbose) # Call parent __init__
-        self.tokenizer = None
-        self.llm = None
-        
-        # Store sampling params for reuse
-        self.sampling_params = SamplingParams(
-            temperature=temperature, 
-            top_p=top_p, 
-            max_tokens=max_tokens
+    """
+    Initializes and loads the vLLM model and tokenizer.
+    Auto-detects number of GPUs and uses tensor parallelism.
+    """
+    super().__init__(model_name, verbose) # Call parent __init__
+    self.tokenizer = None
+    self.llm = None
+    
+    # Auto-detect number of GPUs
+    num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    tensor_parallel_size = num_gpus if num_gpus > 0 else 1
+    
+    # Store sampling params for reuse
+    self.sampling_params = SamplingParams(
+        temperature=temperature, 
+        top_p=top_p, 
+        max_tokens=max_tokens
+    )
+    
+    if self.verbose:
+        print(f"[VLLMWrapper] Loading model: {self.model_name}...")
+        if num_gpus > 0:
+            print(f"[VLLMWrapper] Detected {num_gpus} GPU(s), using tensor_parallel_size={tensor_parallel_size}")
+    
+    try:
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        self.llm = LLM(
+            model=model_name, 
+            disable_log_stats=True, 
+            trust_remote_code=True,
+            tensor_parallel_size=tensor_parallel_size
         )
         
         if self.verbose:
-            print(f"[VLLMWrapper] Loading model: {self.model_name}...")
-        
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.llm = LLM(model=model_name, disable_log_stats=True)
+            print(f"[VLLMWrapper] Model {self.model_name} loaded successfully.")
             
-            if self.verbose:
-                print(f"[VLLMWrapper] Model {self.model_name} loaded successfully.")
-                
-        except Exception as e:
-            print(f"[VLLMWrapper] Error loading model {self.model_name}: {e}")
-            self.llm = None
-            self.tokenizer = None
+    except Exception as e:
+        print(f"[VLLMWrapper] Error loading model {self.model_name}: {e}")
+        self.llm = None
+        self.tokenizer = None
 
     def generate(self, prompt: str) -> Optional[str]:
         if self.llm is None:

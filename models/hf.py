@@ -38,12 +38,23 @@ class HFTransformerWrapper(BaseModel):
             print(f"[HFTransformerWrapper] Loading model: {self.model_name}...")
 
         try:
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+            
+            # Auto-detect number of GPUs
+            num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+            
+            if self.verbose and num_gpus > 0:
+                print(f"[HFTransformerWrapper] Detected {num_gpus} GPU(s), using device_map='auto'")
+            
+            # Use device_map="auto" to automatically distribute across available GPUs
+            # This replaces the manual .to(device) call
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_name,
-                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32
+                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
+                trust_remote_code=True,
+                device_map="auto"  # Automatically distribute across all available GPUs
             )
-            self.model.to(self.device)
+            # Remove: self.model.to(self.device)  # Not needed with device_map="auto"
             self.model.eval()
 
             # Ensure pad token exists
