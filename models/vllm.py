@@ -31,7 +31,7 @@ class VLLMWrapper(BaseModel):
         
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.llm = LLM(model=model_name, disable_log_stats=True, log_level="ERROR")
+            self.llm = LLM(model=model_name, disable_log_stats=True)
             
             if self.verbose:
                 print(f"[VLLMWrapper] Model {self.model_name} loaded successfully.")
@@ -54,11 +54,17 @@ class VLLMWrapper(BaseModel):
             return None
 
     def chat(self, messages: List[Dict[str, str]]) -> Optional[str]:
+        """
+        Applies the model's chat template to a conversation history
+        and returns the next response. The chat template application
+        occurs here in the vLLM-specific wrapper implementation.
+        """
         if self.llm is None or self.tokenizer is None:
             print("[VLLMWrapper] Model or tokenizer is not loaded.")
             return None
         
         try:
+            # Apply chat template - this ensures the input is in the proper format
             prompt_str = self.tokenizer.apply_chat_template(
                 messages, 
                 tokenize=False, 
