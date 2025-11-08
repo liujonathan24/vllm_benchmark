@@ -15,13 +15,14 @@ logging.disable(logging.CRITICAL)
 
 import argparse
 import statistics
+import torch
 from datetime import datetime
 from typing import List, Dict
 
 from utils.model_metadata import LLM_MAP, collect_model_metadata
 from utils.csv_writer import write_results_to_csv
 from utils.dataset_loader import load_gpqa_dataset, sample_gpqa_dataset, gpqa_to_chat_format
-from testing.backend_runner import run_backend_test, run_backend_batch
+from testing.backend_runner import run_backend_batch
 
 # Standardized prompt to use for generation
 DEFAULT_PROMPT = "Hi, tell me a piece of useful and actionable advice on triton and GPU programming."
@@ -30,19 +31,37 @@ DEFAULT_CHAT = [
 ]
 
 
+def _process_results(results: List[Dict]) -> Dict:
+    """Helper to calculate statistics from a list of result dicts."""
+    valid_times = [r['time_taken'] for r in results if r['time_taken'] != float('inf')]
+    valid_tokens = [r['tokens_generated'] for r in results if r['tokens_generated'] > 0]
+    valid_memory = [r['peak_memory_gb'] for r in results if r['peak_memory_gb'] != float('inf')]
+
+    avg_time = statistics.mean(valid_times) if valid_times else float('inf')
+    avg_tokens = statistics.mean(valid_tokens) if valid_tokens else 0
+    avg_memory = statistics.mean(valid_memory) if valid_memory else float('inf')
+
+    # Throughput
+    if avg_time > 0 and avg_tokens > 0:
+        throughput = avg_tokens / avg_time
+    else:
+        throughput = 0.0
+    
+    return {
+        "avg_time": avg_time,
+        "avg_tokens": avg_tokens,
+        "avg_memory": avg_memory,
+        "throughput": throughput,
+        "successful_runs": len(valid_times),
+    }
+
+
 def run_prompt_mode(models_to_test: List, prompt: List[Dict[str, str]], repetitions: int) -> List[Dict]:
     """
     Run benchmark in prompt repetition mode.
-    
-    Args:
-        models_to_test: List of (alias, model_id) tuples
-        prompt: Prompt in chat format
-        repetitions: Number of times to run each prompt
-        
-    Returns:
-        List of result dictionaries
     """
     all_results = []
+    gpu_type = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "N/A"
     
     for alias, model_id in models_to_test:
         print("\n" + "="*50)
@@ -50,47 +69,32 @@ def run_prompt_mode(models_to_test: List, prompt: List[Dict[str, str]], repetiti
         print(f"--- Mode: Prompt Repetition ({repetitions} repetitions) ---")
         print("="*50)
         
-        # Collect timing results for multiple runs
-        vllm_times = []
-        hf_times = []
-        
-        # Run VLLM backend (load once, run repetitions)
+        # Run VLLM backend
         print(f"\n--- Running VLLM Backend {repetitions} times (single load) ---")
         vllm_results = run_backend_batch("vllm", model_id, [prompt] * repetitions)
-        for t in vllm_results:
-            if t != float('inf'):
-                vllm_times.append(t)
+        vllm_stats = _process_results(vllm_results)
         
-        # Run HF backend (load once, run repetitions)
+        # Run HF backend
         print(f"\n--- Running HF Backend {repetitions} times (single load) ---")
         hf_results = run_backend_batch("hf", model_id, [prompt] * repetitions)
-        for t in hf_results:
-            if t != float('inf'):
-                hf_times.append(t)
+        hf_stats = _process_results(hf_results)
         
-        # Calculate averages
-        avg_vllm_time = statistics.mean(vllm_times) if vllm_times else float('inf')
-        avg_hf_time = statistics.mean(hf_times) if hf_times else float('inf')
-        
-        # Calculate ratio (HF/vLLM)
-        if avg_vllm_time != float('inf') and avg_vllm_time > 0 and avg_hf_time != float('inf'):
-            ratio = avg_hf_time / avg_vllm_time
+        # Calculate ratio
+        if vllm_stats['avg_time'] > 0 and hf_stats['avg_time'] != float('inf'):
+            ratio = hf_stats['avg_time'] / vllm_stats['avg_time']
         else:
             ratio = "inf"
         
         # Print results
         print("\n" + "="*50)
         print(f"--- Comparison Results: {alias} ---")
-        print(f"VLLM Average Time: {avg_vllm_time:.4f} seconds ({len(vllm_times)}/{repetitions} successful)")
-        print(f"HF Average Time:   {avg_hf_time:.4f} seconds ({len(hf_times)}/{repetitions} successful)")
+        print(f"VLLM Average Time: {vllm_stats['avg_time']:.4f}s | Throughput: {vllm_stats['throughput']:.2f} tokens/s | Peak Memory: {vllm_stats['avg_memory']:.2f} GB ({vllm_stats['successful_runs']}/{repetitions} successful)")
+        print(f"HF Average Time:   {hf_stats['avg_time']:.4f}s | Throughput: {hf_stats['throughput']:.2f} tokens/s | Peak Memory: {hf_stats['avg_memory']:.2f} GB ({hf_stats['successful_runs']}/{repetitions} successful)")
         
-        if avg_vllm_time < avg_hf_time:
-            speedup = avg_hf_time / avg_vllm_time if avg_vllm_time > 0 else float('inf')
-            print(f"\nResult: VLLM was {speedup:.2f}x faster on average.")
+        if ratio != "inf" and ratio > 1:
+            print(f"\nResult: VLLM was {ratio:.2f}x faster on average.")
         else:
-            speedup = avg_vllm_time / avg_hf_time if avg_hf_time > 0 else float('inf')
-            print(f"\nResult: HF Transformers was {speedup:.2f}x faster on average (or VLLM failed).")
-        
+            print(f"\nResult: HF Transformers was faster or VLLM failed.")
         print("="*50 + "\n")
         
         # Collect metadata and create result entry
@@ -98,10 +102,14 @@ def run_prompt_mode(models_to_test: List, prompt: List[Dict[str, str]], repetiti
         result_entry = {
             "model_name": metadata["model_name"],
             "parameters": metadata["parameters"],
-            "gpqa": metadata["gpqa"],
-            "avg_hf_time": avg_hf_time if avg_hf_time != float('inf') else "inf",
-            "avg_vllm_time": avg_vllm_time if avg_vllm_time != float('inf') else "inf",
-            "ratio": ratio if isinstance(ratio, (int, float)) else "inf",
+            "gpu_type": gpu_type,
+            "avg_hf_time": hf_stats['avg_time'],
+            "avg_vllm_time": vllm_stats['avg_time'],
+            "hf_throughput_tokens_per_sec": hf_stats['throughput'],
+            "vllm_throughput_tokens_per_sec": vllm_stats['throughput'],
+            "hf_peak_gpu_memory_gb": hf_stats['avg_memory'],
+            "vllm_peak_gpu_memory_gb": vllm_stats['avg_memory'],
+            "ratio_hf_vllm": ratio,
             "num_tests": repetitions,
             "attention_type": metadata["attention_type"],
             "has_gqa": metadata["has_gqa"],
@@ -116,16 +124,9 @@ def run_prompt_mode(models_to_test: List, prompt: List[Dict[str, str]], repetiti
 def run_gpqa_mode(models_to_test: List, gpqa_path: str, gpqa_percentage: float) -> List[Dict]:
     """
     Run benchmark in GPQA dataset sampling mode.
-    
-    Args:
-        models_to_test: List of (alias, model_id) tuples
-        gpqa_path: Path to GPQA extended CSV file
-        gpqa_percentage: Percentage of dataset to sample (0-100)
-        
-    Returns:
-        List of result dictionaries
     """
     all_results = []
+    gpu_type = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "N/A"
     
     # Load and sample GPQA dataset
     print(f"\n--- Loading GPQA Dataset from {gpqa_path} ---")
@@ -137,60 +138,40 @@ def run_gpqa_mode(models_to_test: List, gpqa_path: str, gpqa_percentage: float) 
         print(f"Error loading GPQA dataset: {e}")
         return []
     
+    prompts = [gpqa_to_chat_format(row["Question"]) for _, row in sampled_df.iterrows()]
+    
     for alias, model_id in models_to_test:
         print("\n" + "="*50)
         print(f"--- SPEED TEST: {alias} ({model_id}) ---")
-        print(f"--- Mode: GPQA Dataset ({len(sampled_df)} questions) ---")
+        print(f"--- Mode: GPQA Dataset ({len(prompts)} questions) ---")
         print("="*50)
         
-        # Collect timing results for all questions
-        vllm_times = []
-        hf_times = []
-        
-        # Prepare prompts for all questions (chat format)
-        prompts = []
-        for idx, row in sampled_df.iterrows():
-            question = row["Question"]
-            chat_prompt = gpqa_to_chat_format(question)
-            prompts.append(chat_prompt)
-
-        # Run VLLM backend on all questions (single load)
+        # Run VLLM backend
         print(f"\n--- Running VLLM Backend on {len(prompts)} questions (single load) ---")
         vllm_results = run_backend_batch("vllm", model_id, prompts)
-        for t in vllm_results:
-            if t != float('inf'):
-                vllm_times.append(t)
+        vllm_stats = _process_results(vllm_results)
 
-        # Run HF backend on all questions (single load)
+        # Run HF backend
         print(f"\n--- Running HF Backend on {len(prompts)} questions (single load) ---")
         hf_results = run_backend_batch("hf", model_id, prompts)
-        for t in hf_results:
-            if t != float('inf'):
-                hf_times.append(t)
+        hf_stats = _process_results(hf_results)
         
-        # Calculate averages
-        avg_vllm_time = statistics.mean(vllm_times) if vllm_times else float('inf')
-        avg_hf_time = statistics.mean(hf_times) if hf_times else float('inf')
-        
-        # Calculate ratio (HF/vLLM)
-        if avg_vllm_time != float('inf') and avg_vllm_time > 0 and avg_hf_time != float('inf'):
-            ratio = avg_hf_time / avg_vllm_time
+        # Calculate ratio
+        if vllm_stats['avg_time'] > 0 and hf_stats['avg_time'] != float('inf'):
+            ratio = hf_stats['avg_time'] / vllm_stats['avg_time']
         else:
             ratio = "inf"
         
         # Print results
         print("\n" + "="*50)
         print(f"--- Comparison Results: {alias} ---")
-        print(f"VLLM Average Time: {avg_vllm_time:.4f} seconds ({len(vllm_times)}/{len(sampled_df)} successful)")
-        print(f"HF Average Time:   {avg_hf_time:.4f} seconds ({len(hf_times)}/{len(sampled_df)} successful)")
+        print(f"VLLM Average Time: {vllm_stats['avg_time']:.4f}s | Throughput: {vllm_stats['throughput']:.2f} tokens/s | Peak Memory: {vllm_stats['avg_memory']:.2f} GB ({vllm_stats['successful_runs']}/{len(prompts)} successful)")
+        print(f"HF Average Time:   {hf_stats['avg_time']:.4f}s | Throughput: {hf_stats['throughput']:.2f} tokens/s | Peak Memory: {hf_stats['avg_memory']:.2f} GB ({hf_stats['successful_runs']}/{len(prompts)} successful)")
         
-        if avg_vllm_time < avg_hf_time:
-            speedup = avg_hf_time / avg_vllm_time if avg_vllm_time > 0 else float('inf')
-            print(f"\nResult: VLLM was {speedup:.2f}x faster on average.")
+        if ratio != "inf" and ratio > 1:
+            print(f"\nResult: VLLM was {ratio:.2f}x faster on average.")
         else:
-            speedup = avg_vllm_time / avg_hf_time if avg_hf_time > 0 else float('inf')
-            print(f"\nResult: HF Transformers was {speedup:.2f}x faster on average (or VLLM failed).")
-        
+            print(f"\nResult: HF Transformers was faster or VLLM failed.")
         print("="*50 + "\n")
         
         # Collect metadata and create result entry
@@ -198,11 +179,15 @@ def run_gpqa_mode(models_to_test: List, gpqa_path: str, gpqa_percentage: float) 
         result_entry = {
             "model_name": metadata["model_name"],
             "parameters": metadata["parameters"],
-            "gpqa": metadata["gpqa"],
-            "avg_hf_time": avg_hf_time if avg_hf_time != float('inf') else "inf",
-            "avg_vllm_time": avg_vllm_time if avg_vllm_time != float('inf') else "inf",
-            "ratio": ratio if isinstance(ratio, (int, float)) else "inf",
-            "num_tests": len(sampled_df),
+            "gpu_type": gpu_type,
+            "avg_hf_time": hf_stats['avg_time'],
+            "avg_vllm_time": vllm_stats['avg_time'],
+            "hf_throughput_tokens_per_sec": hf_stats['throughput'],
+            "vllm_throughput_tokens_per_sec": vllm_stats['throughput'],
+            "hf_peak_gpu_memory_gb": hf_stats['avg_memory'],
+            "vllm_peak_gpu_memory_gb": vllm_stats['avg_memory'],
+            "ratio_hf_vllm": ratio,
+            "num_tests": len(prompts),
             "attention_type": metadata["attention_type"],
             "has_gqa": metadata["has_gqa"],
             "is_moe": metadata["is_moe"],

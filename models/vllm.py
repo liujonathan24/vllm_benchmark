@@ -52,19 +52,24 @@ class VLLMWrapper(BaseModel):
             self.llm = None
             self.tokenizer = None
 
-    def generate(self, prompt: str) -> Optional[str]:
+    def generate(self, prompt: str) -> Optional[Dict[str, any]]:
         if self.llm is None:
             print("[VLLMWrapper] Model is not loaded.")
             return None
         
         try:
             outputs = self.llm.generate([prompt], self.sampling_params)
-            return outputs[0].outputs[0].text
+            output_text = outputs[0].outputs[0].text
+            num_tokens = len(outputs[0].outputs[0].token_ids)
+            return {
+                "text": output_text,
+                "tokens": num_tokens
+            }
         except Exception as e:
             print(f"[VLLMWrapper] Error during generation: {e}")
             return None
 
-    def chat(self, messages: List[Dict[str, str]]) -> Optional[str]:
+    def chat(self, messages: List[Dict[str, str]]) -> Optional[Dict[str, any]]:
         """
         Applies the model's chat template to a conversation history
         and returns the next response. The chat template application

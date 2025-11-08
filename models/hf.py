@@ -81,7 +81,7 @@ class HFTransformerWrapper(BaseModel):
             self.tokenizer = None
 
     @torch.no_grad()
-    def generate(self, prompt: str) -> Optional[str]:
+    def generate(self, prompt: str) -> Optional[Dict[str, any]]:
         if self.model is None or self.tokenizer is None:
             print("[HFTransformerWrapper] Model is not loaded.")
             return None
@@ -110,14 +110,18 @@ class HFTransformerWrapper(BaseModel):
                 generated_ids,
                 skip_special_tokens=True
             )
-            return generated_text.strip()
+            
+            return {
+                "text": generated_text.strip(),
+                "tokens": len(generated_ids)
+            }
 
         except Exception as e:
             print(f"[HFTransformerWrapper] Error during generation: {e}")
             return None
 
     @torch.no_grad()
-    def chat(self, messages: List[Dict[str, str]]) -> Optional[str]:
+    def chat(self, messages: List[Dict[str, str]]) -> Optional[Dict[str, any]]:
         """
         Applies the model's chat template to a conversation history
         and returns the next response. For llama-3-instruct models (HF only),
@@ -138,14 +142,17 @@ class HFTransformerWrapper(BaseModel):
             print(f"[HFTransformerWrapper] Error applying chat template: {e}")
             return None
 
-        response = self.generate(prompt_str)
-        if response is None:
+        response_data = self.generate(prompt_str)
+        if response_data is None:
             return None
 
+        response_text = response_data['text']
         # Try to strip out any repeated chat history or assistant markers
-        if "<|start_header_id|>assistant<|end_header_id|>" in response:
-            response = response.split("<|start_header_id|>assistant<|end_header_id|>")[-1]
-        return response.strip()
+        if "<|start_header_id|>assistant<|end_header_id|>" in response_text:
+            response_text = response_text.split("<|start_header_id|>assistant<|end_header_id|>")[-1]
+        
+        response_data['text'] = response_text.strip()
+        return response_data
 
     def destroy(self):
         if self.model is None:

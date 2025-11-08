@@ -1,0 +1,10 @@
+pandas
+matplotlib
+seaborn
+transformers
+torch
+vllm
+huggingface_hub
+accelerate
+bitsandbytes
+scipy
