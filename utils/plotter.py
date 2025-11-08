@@ -23,6 +23,11 @@ def load_data(file_path: str) -> pd.DataFrame:
 
 def plot_backend_comparison(df: pd.DataFrame, output_dir: str):
     """Plots a bar chart comparing avg generation time for each backend."""
+    required_cols = ['model_name', 'avg_vllm_time', 'avg_hf_time']
+    if not all(col in df.columns for col in required_cols):
+        print("Skipping backend comparison plot: required columns missing.")
+        return
+
     plt.figure(figsize=(12, 8))
     sns.barplot(data=df, x='model_name', y='avg_vllm_time', color='skyblue', label='vLLM')
     sns.barplot(data=df, x='model_name', y='avg_hf_time', color='salmon', label='Hugging Face')
@@ -37,9 +42,23 @@ def plot_backend_comparison(df: pd.DataFrame, output_dir: str):
 
 def plot_vllm_speedup(df: pd.DataFrame, output_dir: str):
     """Plots a bar chart showing the vLLM speedup ratio."""
+    required_cols = ['model_name', 'avg_hf_time', 'avg_vllm_time']
+    if not all(col in df.columns for col in required_cols):
+        print("Skipping vLLM speedup plot: required columns missing.")
+        return
+    
+    # Avoid division by zero
+    if (df['avg_vllm_time'] == 0).any():
+        print("Warning: 'avg_vllm_time' contains zero values. Speedup cannot be calculated for these entries.")
+        df = df[df['avg_vllm_time'] != 0]
+
+    if df.empty:
+        print("Skipping vLLM speedup plot: no valid data after filtering zero division.")
+        return
+
     df['speedup'] = df['avg_hf_time'] / df['avg_vllm_time']
     plt.figure(figsize=(12, 8))
-    sns.barplot(data=df, x='model_name', y='speedup', palette='viridis')
+    sns.barplot(data=df, x='model_name', y='speedup', hue='model_name', palette='viridis', legend=False)
     plt.xticks(rotation=45, ha='right')
     plt.title('vLLM Speedup vs. Hugging Face')
     plt.ylabel('Speedup Ratio (HF Time / vLLM Time)')
@@ -51,10 +70,15 @@ def plot_vllm_speedup(df: pd.DataFrame, output_dir: str):
 
 def plot_throughput(df: pd.DataFrame, output_dir: str):
     """Plots a bar chart comparing throughput for each backend."""
+    required_cols = ['model_name', 'vllm_throughput_tokens_per_sec', 'hf_throughput_tokens_per_sec']
+    if not all(col in df.columns for col in required_cols):
+        print("Skipping throughput plot: required columns missing.")
+        return
+
     plt.figure(figsize=(12, 8))
     # Melt the dataframe to have backend as a variable
     throughput_df = df.melt(id_vars='model_name', 
-                            value_vars=['vllm_throughput_tokens_per_sec', 'hf_throughput_tokens_per_sec'],
+                            value_vars=required_cols[1:], # only throughput columns
                             var_name='backend', value_name='throughput')
     throughput_df['backend'] = throughput_df['backend'].str.replace('_throughput_tokens_per_sec', '').str.upper()
     
@@ -70,9 +94,14 @@ def plot_throughput(df: pd.DataFrame, output_dir: str):
 
 def plot_memory_usage(df: pd.DataFrame, output_dir: str):
     """Plots a bar chart comparing peak GPU memory usage."""
+    required_cols = ['model_name', 'vllm_peak_gpu_memory_gb', 'hf_peak_gpu_memory_gb']
+    if not all(col in df.columns for col in required_cols):
+        print("Skipping memory usage plot: required columns missing.")
+        return
+
     plt.figure(figsize=(12, 8))
     memory_df = df.melt(id_vars='model_name',
-                        value_vars=['vllm_peak_gpu_memory_gb', 'hf_peak_gpu_memory_gb'],
+                        value_vars=required_cols[1:], # only memory columns
                         var_name='backend', value_name='memory')
     memory_df['backend'] = memory_df['backend'].str.replace('_peak_gpu_memory_gb', '').str.upper()
 
