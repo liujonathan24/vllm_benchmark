@@ -12,8 +12,8 @@ LLM_MAP = {
     "gemma-7B-instruct": "google/gemma-7b-it",
     "Qwen2-7B-Instruct": "Qwen/Qwen2-7B-Instruct",
     "Falcon-7B-Instruct": "tiiuae/Falcon3-7B-Instruct",
-    "Qwen3-Omni-30B-A3B-Instruct": "Qwen/Qwen3-30B-A3B-Instruct-2507",
-    "Phi-3-7b": "microsoft/Phi-3-small-128k-instruct",
+    "Qwen3-30B-A3B-Instruct-2507": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    # "Phi-3-7b": "microsoft/Phi-3-small-128k-instruct",
     # "opt-125m": "facebook/opt-125m", 
 }
 

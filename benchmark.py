@@ -21,7 +21,7 @@ from typing import List, Dict
 from utils.model_metadata import LLM_MAP, collect_model_metadata
 from utils.csv_writer import write_results_to_csv
 from utils.dataset_loader import load_gpqa_dataset, sample_gpqa_dataset, gpqa_to_chat_format
-from testing.backend_runner import run_backend_test
+from testing.backend_runner import run_backend_test, run_backend_batch
 
 # Standardized prompt to use for generation
 DEFAULT_PROMPT = "Hi, tell me a piece of useful and actionable advice on triton and GPU programming."
@@ -54,21 +54,19 @@ def run_prompt_mode(models_to_test: List, prompt: List[Dict[str, str]], repetiti
         vllm_times = []
         hf_times = []
         
-        # Run VLLM backend
-        print(f"\n--- Running VLLM Backend {repetitions} times ---")
-        for i in range(repetitions):
-            print(f"\n[Repetition {i+1}/{repetitions}]")
-            time_taken = run_backend_test("vllm", model_id, prompt)
-            if time_taken != float('inf'):
-                vllm_times.append(time_taken)
+        # Run VLLM backend (load once, run repetitions)
+        print(f"\n--- Running VLLM Backend {repetitions} times (single load) ---")
+        vllm_results = run_backend_batch("vllm", model_id, [prompt] * repetitions)
+        for t in vllm_results:
+            if t != float('inf'):
+                vllm_times.append(t)
         
-        # Run HF backend
-        print(f"\n--- Running HF Backend {repetitions} times ---")
-        for i in range(repetitions):
-            print(f"\n[Repetition {i+1}/{repetitions}]")
-            time_taken = run_backend_test("hf", model_id, prompt)
-            if time_taken != float('inf'):
-                hf_times.append(time_taken)
+        # Run HF backend (load once, run repetitions)
+        print(f"\n--- Running HF Backend {repetitions} times (single load) ---")
+        hf_results = run_backend_batch("hf", model_id, [prompt] * repetitions)
+        for t in hf_results:
+            if t != float('inf'):
+                hf_times.append(t)
         
         # Calculate averages
         avg_vllm_time = statistics.mean(vllm_times) if vllm_times else float('inf')
@@ -149,25 +147,26 @@ def run_gpqa_mode(models_to_test: List, gpqa_path: str, gpqa_percentage: float) 
         vllm_times = []
         hf_times = []
         
-        # Run VLLM backend on all questions
-        print(f"\n--- Running VLLM Backend on {len(sampled_df)} questions ---")
+        # Prepare prompts for all questions (chat format)
+        prompts = []
         for idx, row in sampled_df.iterrows():
             question = row["Question"]
             chat_prompt = gpqa_to_chat_format(question)
-            print(f"\n[Question {idx+1}/{len(sampled_df)}]")
-            time_taken = run_backend_test("vllm", model_id, chat_prompt)
-            if time_taken != float('inf'):
-                vllm_times.append(time_taken)
-        
-        # Run HF backend on all questions
-        print(f"\n--- Running HF Backend on {len(sampled_df)} questions ---")
-        for idx, row in sampled_df.iterrows():
-            question = row["Question"]
-            chat_prompt = gpqa_to_chat_format(question)
-            print(f"\n[Question {idx+1}/{len(sampled_df)}]")
-            time_taken = run_backend_test("hf", model_id, chat_prompt)
-            if time_taken != float('inf'):
-                hf_times.append(time_taken)
+            prompts.append(chat_prompt)
+
+        # Run VLLM backend on all questions (single load)
+        print(f"\n--- Running VLLM Backend on {len(prompts)} questions (single load) ---")
+        vllm_results = run_backend_batch("vllm", model_id, prompts)
+        for t in vllm_results:
+            if t != float('inf'):
+                vllm_times.append(t)
+
+        # Run HF backend on all questions (single load)
+        print(f"\n--- Running HF Backend on {len(prompts)} questions (single load) ---")
+        hf_results = run_backend_batch("hf", model_id, prompts)
+        for t in hf_results:
+            if t != float('inf'):
+                hf_times.append(t)
         
         # Calculate averages
         avg_vllm_time = statistics.mean(vllm_times) if vllm_times else float('inf')
@@ -295,7 +294,7 @@ if __name__ == "__main__":
         help="Number of times to run the custom prompt (only used in 'prompt' mode, default: 5)"
     )
     parser.add_argument(
-        "--gpqa-percentage",
+        "-g", "--gpqa-percentage",
         type=float,
         default=10.0,
         help="Percentage of GPQA dataset to sample (only used in 'gpqa' mode, default: 10.0, range: 0-100)"
