@@ -205,15 +205,13 @@ def main():
     # --- Create a unique directory for this experiment run ---
     experiment_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     results_dir = os.path.join("results", experiment_id)
-    plots_dir = os.path.join("plots", experiment_id)
+    plots_dir = os.path.join(results_dir, "plots")
     
     if not args.dry_run:
-        os.makedirs(results_dir, exist_ok=True)
-        os.makedirs(plots_dir, exist_ok=True)
+        os.makedirs(plots_dir, exist_ok=True) # This creates the parent `results_dir` as well
     
     print(f"--- Starting Experiment Run: {experiment_id} ---")
-    print(f"Results will be saved in: {results_dir}")
-    print(f"Plots will be saved in: {plots_dir}")
+    print(f"All results and plots will be saved in: {results_dir}")
     # ---
 
     per_model_output_format = os.path.join(results_dir, "benchmark_{model}.csv")
