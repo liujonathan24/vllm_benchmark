@@ -148,6 +148,47 @@ def parse_args():
 
 
 from datetime import datetime
+import time
+
+def wait_for_jobs(job_ids: List[str], interval: int):
+    """Polls squeue until the given job IDs are no longer in the queue."""
+    if not job_ids:
+        return
+
+    print(f"\n--- Waiting for {len(job_ids)} jobs to complete ---")
+    job_id_str = ",".join(job_ids)
+    
+    while True:
+        try:
+            # Use -h for no header, -j for specific jobs.
+            # The output will be empty if no jobs are found.
+            cmd = ["squeue", "-h", "-j", job_id_str]
+            res = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            
+            stdout = res.stdout.strip()
+            if not stdout:
+                print("All jobs completed.")
+                break
+            
+            num_remaining = len(stdout.splitlines())
+            print(f"Polling squeue: {num_remaining} jobs remaining. Waiting {interval}s...")
+
+        except FileNotFoundError:
+            print("Warning: squeue not found on PATH. Cannot wait for jobs.")
+            return
+        except subprocess.CalledProcessError as e:
+            # squeue often exits with an error if the job ID is no longer valid,
+            # which is our success condition.
+            if "Invalid job id specified" in e.stderr:
+                print("Jobs no longer found in squeue. Assuming completion.")
+                break
+            else:
+                print(f"An error occurred while polling squeue: {e.stderr}")
+                print("Stopping wait loop.")
+                return
+        
+        time.sleep(interval)
+
 
 def main():
     args = parse_args()
@@ -192,7 +233,7 @@ def main():
 
     # Optionally wait for job completion
     if not args.dry_run and args.wait and submitted_job_ids:
-        # ... (wait logic remains the same) ...
+        wait_for_jobs(submitted_job_ids, args.wait_interval)
 
     # Post-processing steps
     if not args.dry_run and (args.merge_results or args.plot):
