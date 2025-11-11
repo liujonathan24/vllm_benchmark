@@ -1,6 +1,6 @@
 """
 Model metadata utilities for benchmark.
-Contains model constants and metadata collection functions.
+Contains model constants and metadata collection functions such as parameter count, type of attention, GQA, MOE (+ # of experts).
 """
 import re
 from typing import Dict
